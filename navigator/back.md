@@ -1,17 +1,27 @@
-# Navigator 与 back
+# Navigator 与 Back
 
-flutter 是通过 Navigator 与 route 来进行页面的切换的。navigator.push 推入一个 route，navigator.pop 退出一个页面。
+在移动端设备上，用户在多个应用或者一个应用的多个页面内切换，给用户提供一个返回的操作能力是最基本的。
 
-如何进行页面的返回呢？
+传统原因，现在几乎全部 Android 设备都还会提供物理的或者虚拟的返回按键。虽然大多 Android 的定制系统（尤其是国内定制系统）都支持隐藏（甚至默认隐藏）包含着虚拟返回键的虚拟导航栏（Virtual Navigation Bar），但是同时也会提供系统级别的手势返回操作，其功效跟屋里的返回按钮完全等同。
 
-最基本的当然就是 navigator.pop，把顶部 route 从栈中 pop 出去，露出下面的一个 route，实现返回的效果。
+在 iOS 设备上，一直是没有系统返回按键的，不管是物理的还是虚拟的，App 这能通过内部 App Bar 上的返回按钮来实现用户回退到上一页面的需求。但是从 iOS 7 以来，iOS 在系统级别上实现了 UIViewController 的侧滑返回(或称为 swipe back)功能，非常的好用上瘾。
+
+在 Flutter 的世界里，是通过 Navigator 与 Route 来进行页面的切换的：Navigator.push 推入一个 Route，Navigator.pop 退出一个 Route。
+
+> 在 Navigator 这个语境下，Route 与页面被认为是一个等价的概念。下面会对两者混用。
+
+那么当用户触发系统的返回事件时（比如点击  Android 的实体返回键或者虚拟返回键），在 Flutter 中如何实现页面的返回呢？
+
+最直接的想法当然就是 Navigator.pop，把顶部 Route 从栈中 pop 出去，露出下面的一个 Route，实现页面返回的效果。
+
+这当然没错，但是需要思考
 
 ## 两个问题：
 
-1. 系统的返回是如何响应的？所谓系统返回是指 Android 的实体返回键或者虚拟返回键，或者 Android，iOS 都有的 back swipe。
-2. 如何拦截系统 back 事件
+1. 系统的 back 事件是如何被 Flutter App 响应的？
+2. 如何拦截系统 Back 事件，做一些 App 内部的业务逻辑处理？
 
-### 如何响应系统的返回
+### 如何响应系统的 Back 事件
 
 在 flutter/lib/src/services/system_channels.dart 中定义了一个叫 navigation 的 MethodChannel，这个 channel 就是用来传递原生平台的 back 事件的。
 
@@ -93,7 +103,7 @@ Future<void> handlePopRoute() async {
 
 可以看出 WigetsApp 负责了 Navigator 的创建并通知 Navigator 对系统的返回事件进行响应。
 
-### 如何拦截系统 back 事件
+### 如何拦截系统 Back 事件
 
 有时候需要拦截 back 事件，做些特殊处理。比如填写表单过程中，比如返回需要做些UI的变化
 
