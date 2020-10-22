@@ -458,3 +458,282 @@ static bool _isPopGestureEnabled<T>(PageRoute<T> route) {
 ```
 
 如果能在这种情况下不是简单的禁用返回动画，而是给一个稍微拖动一点的动画，效果可能会更好。
+
+在 Android 的设备上，如果把 swipe gesture 的触控区域离开边缘一点，不要跟系统的侧滑返回手势区域重叠，那么也是可以打开侧滑返回的。
+
+
+
+# CupertinoPageRoute 动画和手势
+
+## 再看基类 Routes
+
+再看看 Route 的继承关系及各个 Route 的作用：
+
+<img src="./routes2.jpg" />
+
+可以看出，要想实现一个 ModalRoute 的 UI，只需要实现 buildPage，要想实现出入场动画，只需实现 buildTransitions
+
+## CupertinoPageRoute 如何实现 UI 和 动画
+
+看看 CupertinoPageRoute 这个 ModalRoute 是如何通过实现这两个方法来实现相应的功能的
+
+```dart
+class CupertinoPageRoute<T> extends PageRoute<T> with CupertinoRouteTransitionMixin<T> {
+  final WidgetBuilder builder;
+}
+```
+
+CupertinoPageRoute 的主要功能都是通过 CupertinoRouteTransitionMixin 实现的。
+
+```dart
+@override
+Widget buildPage(BuildContext context, Animation<double> animation, Animation<double> secondaryAnimation) {
+  final Widget child = builder(context);
+  final Widget result = Semantics(
+    scopesRoute: true,
+    explicitChildNodes: true,
+    child: child,
+  );
+  return result;
+}
+  @override
+  Widget buildTransitions(BuildContext context, Animation<double> animation, Animation<double> secondaryAnimation, Widget child) {
+    return buildPageTransitions<T>(this, context, animation, secondaryAnimation, child);
+  }
+
+  static Widget buildPageTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    // linear 的意思是是否线性的响应 animation 的变化
+    // TransitionRoute 生成、维护的两个 animation 的 Curve 是线性的。
+    // CupertinoPageRoute 在做出入场动画时为了更好看，肯定加了 Curve 的。
+    // 但是如果是响应手势的拖动时，就能加 Curve，这就是这里 linear 的意思
+    final bool linearTransition = isPopGestureInProgress(route);
+    if (route.fullscreenDialog) {
+      // 有兴趣可以分析下这里有没有有意思的事情
+    } else {
+      return CupertinoPageTransition(
+        primaryRouteAnimation: animation,
+        secondaryRouteAnimation: secondaryAnimation,
+        linearTransition: linearTransition,
+        // 这里就是 swipe gesture 的实现，稍后再说
+        child: _CupertinoBackGestureDetector<T>(
+          enabledCallback: () => _isPopGestureEnabled<T>(route),
+          onStartPopGesture: () => _startPopGesture<T>(route),
+          child: child,
+        ),
+      );
+    }
+  }
+
+class CupertinoPageTransition extends StatelessWidget {
+  // 就是在这里实现一个完全 iOS 风格的出入场动画：
+  // _primaryPositionAnimation 是顶层 Route 的出入场动画
+  // _secondaryPositionAnimation 是下面一层 Route 的随动动画
+  // _primaryShadowAnimation 是顶层 Route 在出入场时阴影的动画
+  CupertinoPageTransition({
+    Key key,
+    @required Animation<double> primaryRouteAnimation,
+    @required Animation<double> secondaryRouteAnimation,
+    @required this.child,
+    @required bool linearTransition,
+  }) : assert(linearTransition != null),
+       _primaryPositionAnimation =
+           (linearTransition
+             ? primaryRouteAnimation
+             : CurvedAnimation(
+                 parent: primaryRouteAnimation,
+                 curve: Curves.linearToEaseOut,
+                 reverseCurve: Curves.easeInToLinear,
+               )
+           ).drive(_kRightMiddleTween),
+       _secondaryPositionAnimation =
+           (linearTransition
+             ? secondaryRouteAnimation
+             : CurvedAnimation(
+                 parent: secondaryRouteAnimation,
+                 curve: Curves.linearToEaseOut,
+                 reverseCurve: Curves.easeInToLinear,
+               )
+           ).drive(_kMiddleLeftTween),
+       _primaryShadowAnimation =
+           (linearTransition
+             ? primaryRouteAnimation
+             : CurvedAnimation(
+                 parent: primaryRouteAnimation,
+                 curve: Curves.linearToEaseOut,
+               )
+           ).drive(_kGradientShadowTween),
+       super(key: key);
+
+  final Animation<Offset> _primaryPositionAnimation;
+  final Animation<Offset> _secondaryPositionAnimation;
+  final Animation<Decoration> _primaryShadowAnimation;
+  
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    assert(debugCheckHasDirectionality(context));
+    final TextDirection textDirection = Directionality.of(context);
+    return SlideTransition(
+      position: _secondaryPositionAnimation,
+      textDirection: textDirection,
+      transformHitTests: false,
+      child: SlideTransition(
+        position: _primaryPositionAnimation,
+        textDirection: textDirection,
+        child: DecoratedBoxTransition(
+          decoration: _primaryShadowAnimation,
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+```
+
+有了前面一系列 Routes 的铺垫，实现一个 iOS 风格的页面出入场动画并不是很复杂。
+
+## CupertinoPageRoute 如何实现 swipe back
+
+下面看看 swipe gesture 是如何实现的。
+
+如前面的代码，CupertinoRouteTransitionMixin 在 buildTransition 时出入的 child 是这个：
+
+```dart
+_CupertinoBackGestureDetector<T>(
+          enabledCallback: () => _isPopGestureEnabled<T>(route),
+          onStartPopGesture: () => _startPopGesture<T>(route),
+          child: child,
+),
+```
+
+看看这个 _CupertinoBackGestureDetector：
+
+```dart
+class _CupertinoBackGestureDetector<T> extends StatefulWidget {
+  const _CupertinoBackGestureDetector({
+    Key key,
+    @required this.enabledCallback, // ValueGetter<bool> enabledCallback;
+    @required this.onStartPopGesture, // ValueGetter<_CupertinoBackGestureController<T>> onStartPopGesture;
+    @required this.child,  // Widget child;
+  });
+}
+
+class _CupertinoBackGestureDetectorState<T> extends State<_CupertinoBackGestureDetector<T>> {
+  // 手势数据的 处理器
+  _CupertinoBackGestureController<T> _backGestureController;
+	// swipe back 手势的识别器
+  HorizontalDragGestureRecognizer _recognizer;
+  @override
+  void initState() {
+    super.initState();
+    // 注册 swipe back 手势识别器的回调
+    _recognizer = HorizontalDragGestureRecognizer(debugOwner: this)
+      ..onStart = _handleDragStart
+      ..onUpdate = _handleDragUpdate
+      ..onEnd = _handleDragEnd
+      ..onCancel = _handleDragCancel;
+  }
+
+
+  void _handleDragStart(DragStartDetails details) {
+    /// 手势识别到了，创建 处理器
+    _backGestureController = widget.onStartPopGesture();
+  }
+
+  void _handleDragUpdate(DragUpdateDetails details) {
+    double primaryDelta = _convertToLogical(details.primaryDelta / context.size.width);
+    // drag 手势数据更新，交给 处理器处理
+    _backGestureController.dragUpdate(primaryDelta);
+  }
+
+  void _handleDragEnd(DragEndDetails details) {
+    /// 告诉 手势数据处理器 拖动结束了，并不再引用手势数据处理器
+    _backGestureController.dragEnd();
+    _backGestureController = null;
+  }
+  
+  void _handleDragCancel() {
+    // 同 _handleDragEnd
+    _backGestureController?.dragEnd(0.0, totalPrimaryDelta);
+    _backGestureController = null;
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (widget.enabledCallback())
+      // 当一个触屏点检测到的时候，告诉 手势识别器 开始追踪识别
+      _recognizer.addPointer(event);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.passthrough,
+      children: <Widget>[
+        widget.child,
+        PositionedDirectional(
+          // 通过 Listener 追踪 触屏手势
+          child: Listener(
+            onPointerDown: _handlePointerDown,
+            behavior: HitTestBehavior.translucent,
+          ),
+        ),
+      ],
+    );
+  }
+}
+```
+
+整个流程比较简单：用 Listener 监听触屏事件(PointerDownEvent)，然后把 PointerDownEvent 交给手势识别器HorizontalDragGestureRecognizer 去跟踪处理，HorizontalDragGestureRecognizer 在跟踪的过程中不停的触发回调，告知监听者手势数据的变化（手势开始了、移动了多少距离，是否结束，是否取消），监听者拿到这些数据后交给 手势数据处理器 _backGestureController 进行处理。
+
+HorizontalDragGestureRecognizer 手势识别是另外一个比较复杂的 topic，这里不做深入。我们只是简单知道他可以识别水平的滑动手势，并在手势变化的时候发出回到。
+
+现在看看手势数据处理器 _backGestureController 是如何把手势数据转换成 UI 上的变化的：
+
+_backGestureController 是一个 _CupertinoBackGestureController：
+
+```dart
+class _CupertinoBackGestureController<T> {
+  _CupertinoBackGestureController({
+    @required this.navigator,
+    @required this.controller,
+  });
+  // 持有 TransitionRoute 的 AnimationController，通过它控制 animation 的 value，以变化 UI 响应手势。（完）
+  final AnimationController controller;
+  // 满足条件的时候做 pop
+  final NavigatorState navigator;
+
+  void dragUpdate(double delta) {
+      controller.value -= delta;
+  }
+  void dragEnd(double velocity) {
+    bool animateForward;
+    if (velocity.abs() >= _kMinFlingVelocity)
+      animateForward = velocity <= 0;
+    else
+      animateForward = controller.value > 0.5;
+
+    if (animateForward) {
+      // 退回原位
+      controller.animateTo(1.0, ...);
+    } else {
+      // 手势到位了，pop，pop 只会把 Route 的生命周期短暂的置为 pop，动画完成了 Route 才会走完自己生命周期
+      // 参考文雄上次 Navigator 的培训
+      navigator.pop();
+      if (controller.isAnimating) {
+        /// 把剩下的退场动画完成
+        controller.animateBack(0.0, ...);
+      }
+    }
+    ...
+  }
+}
+```
+
+swipe back 的实现就是这样的。
