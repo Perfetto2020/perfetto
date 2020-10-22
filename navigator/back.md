@@ -350,50 +350,111 @@ class LocalHistoryEntry {
 
    setState() or markNeedsBuild() called during build.
 
-4. removeLocalHistoryEntry 仍会导致 LocalHistoryEntry 中 onRemove 被调用
+4. removeLocalHistoryEntry 仍会导致 LocalHistoryEntry 中 onRemove 被调用。
 
-## InsightBank中的诉求
+## 几个问题
 
-1. 某些页面在返回时弹窗，确定返回，取消留在当前页面
-2. 退出页面时执行某个操作，例如保存一个数据到redux的state tree
-3. 支持页面内的简单route
-4. 返回两次退出应用
+### BasePageState 存在的问题
 
+1. 不能 add 多个 LocalHistoryEntry
 
+   ```dart
+   void addPageHistoryEntry(BuildContext context, VoidCallback onRemove) {
+     if (_pageHistoryEntry == null) {
+       _shouldCallOnRemove = true;
+       _pageHistoryEntry = PageHistoryEntry(
+         onRemove: () {
+           if (_shouldCallOnRemove) onRemove.call();
+           _pageHistoryEntry = null;
+         },
+       );
+       _pageHistoryEntry.addLocalHistoryEntry(context);
+     }
+   }
+   ```
 
+2. 不能在 build 流程中 add
 
+   因此， 在 onResume 中不能直接 add LocalHistoryEntry。
 
-LocalHistoryEntry问题跟踪
+3. postFrame 回来后 context 可能已经被回收
 
-```dart
+   这是一个结构性的问题，不好修复。
+
+4. popUntil 的时候不好处理
+
+### 超时登出报错，popUntil 不报错的原因
+
+#### 现象：
+
+停在 LoanHomeConfirmPage 等待长时间未操作自动登出触发 popUntil(Home)，报错
+
+The method 'addLocalHistoryEntry' was called on null.
+
+但是，直接 LoanHomeConfirmPage 直接触发 popUntil(Home) 不报错
+
+#### 原因：
+
+``` dart
 @override
 void onResume() {
   super.onResume();
-  if (CustomTextInputType.isCustomTextInputType(widget.textInputType)) {
-    KeyboardManager.interceptInput(context);
-  }
+  addPageHistoryEntryPostFrame(() {
+    CouponUtils.saveSelectedCoupon(Dispatcher.store(context), couponList: []);
+    Router.pageBack(context);
+  }, postFrame: true);
+```
+
+LoanHomeConfirmPage 是嵌在 LoanHomePage 中的，LoanHomePage 才是 Route 的页面。
+
+在超时登出 popUntil 之前，把 Redux Store 都重新初始化了，因此在 postFrame 的这个 frame 过程中，嵌套的 LoanHomeConfirmPage 就会被 deactive 然后 dispose，当 build 的这一帧完成时 (post frame)，LoanHomeConfirmPage 的 context已经从Element tree中删除了。
+
+这是再去执行 onRemove 中的代码，其中 context 就是 null 了。
+
+但是，如果直接 popUntil(Home)，postFrame 回来后 LoanHomeConfirmPage 的 context 一直在 Element tree 中。
+
+### iOS 侧滑返回的实现，如何在 Android 实现侧滑返回
+
+通过 CupertinoPageRoute 实现。
+
+在 Android 上实际上也是支持侧滑返回的，只不过在 MIUI 设备上默认的手势返回操作抢占了侧滑返回手势的消费。
+
+### 一点改进
+
+项目中使用的最多的 Route 是 CupertinoPageRoute，当给 CupertinoPageRoute 添加上 WillPopCallback 或 LocalHistoryEntry 后，侧滑返回手势失效了。原因是在 CupertinoPageRoute 中：
+
+```dart
+static bool _isPopGestureEnabled<T>(PageRoute<T> route) {
+  // If there's nothing to go back to, then obviously we don't support
+  // the back gesture.
+  if (route.isFirst)
+    return false;
+  // If the route wouldn't actually pop if we popped it, then the gesture
+  // would be really confusing (or would skip internal routes), so disallow it.
+  if (route.willHandlePopInternally)
+    return false;
+  // If attempts to dismiss this route might be vetoed such as in a page
+  // with forms, then do not allow the user to dismiss the route with a swipe.
+  if (route.hasScopedWillPopCallback)
+    return false;
+  // Fullscreen dialogs aren't dismissible by back swipe.
+  if (route.fullscreenDialog)
+    return false;
+  // If we're in an animation already, we cannot be manually swiped.
+  if (route.animation.status != AnimationStatus.completed)
+    return false;
+  // If we're being popped into, we also cannot be swiped until the pop above
+  // it completes. This translates to our secondary animation being
+  // dismissed.
+  if (route.secondaryAnimation.status != AnimationStatus.dismissed)
+    return false;
+  // If we're in a gesture already, we cannot start another.
+  if (isPopGestureInProgress(route))
+    return false;
+
+  // Looks like a back gesture would be welcome!
+  return true;
 }
 ```
 
-
-
-
-
-为什么把WillPopScope放到AppBar里面
-
-cons：感觉上比较奇怪
-
-pros：
-
-1. 防止page复用时，有重复的onWillPop被触发。A page可以单独使用，也会嵌入到B page中使用
-2. 不用每个State都去with ExitStateMixin。一个AppBar的参数可以搞定
-
-
-
-
-
-Todo: lib/widgets/container/kyc/address_page.dart:189 forbidBack删掉
-
-为什么弹窗能被logout的popuntil取消掉。
-
-如何在maybePop的时候也传递返回值 T result
+如果能在这种情况下不是简单的禁用返回动画，而是给一个稍微拖动一点的动画，效果可能会更好。
