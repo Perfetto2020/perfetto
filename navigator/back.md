@@ -14,7 +14,7 @@
 
 最直接的想法当然就是 Navigator.pop，把顶部 Route 从栈中 pop 出去，露出下面的一个 Route，实现页面返回的效果。
 
-这当然没错，但是需要思考
+这当然没错，但是需要考虑两个问题：
 
 ## 两个问题：
 
@@ -521,7 +521,7 @@ Widget buildPage(BuildContext context, Animation<double> animation, Animation<do
     // linear 的意思是是否线性的响应 animation 的变化
     // TransitionRoute 生成、维护的两个 animation 的 Curve 是线性的。
     // CupertinoPageRoute 在做出入场动画时为了更好看，肯定加了 Curve 的。
-    // 但是如果是响应手势的拖动时，就能加 Curve，这就是这里 linear 的意思
+    // 但是如果是响应手势的拖动时，就不能加 Curve，这就是这里 linear 的意思
     final bool linearTransition = isPopGestureInProgress(route);
     if (route.fullscreenDialog) {
       // 有兴趣可以分析下这里有没有有意思的事情
