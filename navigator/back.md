@@ -194,7 +194,7 @@ didPop 是我们可以用来拦截 back 事件的第二个 hook 点。
 
 ## 如何拦截 back 事件
 
-现在有两个可以拦截 back 时间的api：Route.didPop 和 Route.willPop
+现在有两个可以拦截 back 事件的api：Route.didPop 和 Route.willPop
 
 一种方案是直接在项目的 Route 实现中自己实现 dipPop 或 willPop 的逻辑，以达到拦截 back 事件的目的。
 
