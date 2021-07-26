@@ -116,7 +116,7 @@ Future<ByteData?> _sendPlatformMessage(String channel, ByteData? message) {
 
 * [flutter issues 2396](https://github.com/flutter/flutter/issues/2396)
 
-跟踪 Flutter Frameword 代码的时候，跟踪到最后有时候会遇到类似这样的代码：
+跟踪 Flutter Framework 代码的时候，经常会遇到类似这样的带 native 关键字的代码：
 
 ```dart
   String? _sendPlatformMessage(String name, PlatformMessageResponseCallback? callback, ByteData? data)
